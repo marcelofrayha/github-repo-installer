@@ -21,19 +21,33 @@ Detects and installs dependencies for multiple programming languages and framewo
 - Rust (cargo)
 - .NET (nuget)
 - Web3/Blockchain
+  - Foundry
   - Truffle
   - Hardhat
   - Solidity
   - Vyper
+  - Anchor (Solana)
+  - ink! (Substrate)
+  - Move
+  - NEAR Protocol
+  - Tezos
+  - Brownie
+  - Substrate
 
 ### 3. Environment Variable Management
 - Automatically detects required environment variables from:
   - Source code files
   - .env files
   - Configuration files
+  - Smart contract files
 - Supports various environment variable patterns across languages
 - Securely prompts for missing environment variables
 - Handles sensitive variables (passwords, keys, tokens) with masked input
+- Supports Web3-specific environment patterns:
+  - RPC URLs
+  - Private Keys
+  - API Keys
+  - Mnemonics
 
 ### 4. Package Manager Version Control
 - Detects required package manager versions from project files
@@ -55,7 +69,9 @@ Detects and installs dependencies for multiple programming languages and framewo
 
 ## Usage
 
-```python install_github_repo.py <github_repo_url>```
+```bash
+python install_github_repo.py <github_repo_url>
+```
 
 ## Requirements
 

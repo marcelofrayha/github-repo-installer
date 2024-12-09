@@ -72,7 +72,7 @@ def detect_environment_variables(base_path: str) -> Set[str]:
     """
     env_vars = set()
     # Define file extensions to scan, including Web3-specific files
-    file_extensions = ['.py', '.js', '.jsx', '.ts', '.tsx', '.php', '.env', '.sol', '.vy']
+    file_extensions = ['.py', '.js', '.jsx', '.ts', '.tsx', '.php', '.env', '.sol', '.vy', '.fe', '.move', '.ink', '.rs', '.toml']
 
     # Define regex patterns for different languages
     patterns = [
@@ -92,6 +92,22 @@ def detect_environment_variables(base_path: str) -> Set[str]:
         # Vyper (similar to Solidity)
         re.compile(r"#\s*Environment\s*Variable\s*:\s*(\w+)"),
         re.compile(r"#\s*ENV\s*VAR\s*:\s*(\w+)"),
+        # Foundry specific
+        re.compile(r"vm\.envString\(['\"](\w+)['\"]\)"),
+        re.compile(r"vm\.envAddress\(['\"](\w+)['\"]\)"),
+        re.compile(r"vm\.envUint\(['\"](\w+)['\"]\)"),
+        # Anchor/Solana
+        re.compile(r"env!\(['\"](\w+)['\"]\)"),
+        re.compile(r"@envvar\(['\"](\w+)['\"]\)"),
+        # Substrate/ink!
+        re.compile(r"env:\:['\"](\w+)['\"]\)"),
+        # NEAR
+        re.compile(r"near_env\(['\"](\w+)['\"]\)"),
+        # General Web3 patterns
+        re.compile(r"RPC_URL['\"]?\s*[:=]\s*['\"]?(\w+)['\"]?"),
+        re.compile(r"PRIVATE_KEY['\"]?\s*[:=]\s*['\"]?(\w+)['\"]?"),
+        re.compile(r"MNEMONIC['\"]?\s*[:=]\s*['\"]?(\w+)['\"]?"),
+        re.compile(r"API_KEY['\"]?\s*[:=]\s*['\"]?(\w+)['\"]?"),
     ]
 
     # List to hold paths of subrepositories
@@ -398,6 +414,41 @@ def download_and_install(repo_url: str) -> None:
             'Windows': [['curl', '--proto', '=https', '--tlsv1.2', '-sSf', 'https://win.rustup.rs', '-o', 'rustup-init.exe'],
                        ['rustup-init.exe', '-y']],
         },
+        'foundryup': {
+            'Darwin': [['curl', '-L', 'https://foundry.paradigm.xyz', '|', 'bash']],
+            'Linux': [['curl', '-L', 'https://foundry.paradigm.xyz', '|', 'bash']],
+            'Windows': [['curl', '-L', 'https://foundry.paradigm.xyz', '|', 'bash']],
+        },
+        'anchor': {
+            'Darwin': [['cargo', 'install', '--git', 'https://github.com/project-serum/anchor', 'anchor-cli']],
+            'Linux': [['cargo', 'install', '--git', 'https://github.com/project-serum/anchor', 'anchor-cli']],
+            'Windows': [['cargo', 'install', '--git', 'https://github.com/project-serum/anchor', 'anchor-cli']],
+        },
+        'brownie': {
+            'Darwin': [['pip', 'install', 'eth-brownie']],
+            'Linux': [['pip', 'install', 'eth-brownie']],
+            'Windows': [['pip', 'install', 'eth-brownie']],
+        },
+        'substrate': {
+            'Darwin': [['cargo', 'install', 'substrate-cli-tools']],
+            'Linux': [['cargo', 'install', 'substrate-cli-tools']],
+            'Windows': [['cargo', 'install', 'substrate-cli-tools']],
+        },
+        'ink': {
+            'Darwin': [['cargo', 'install', 'cargo-contract']],
+            'Linux': [['cargo', 'install', 'cargo-contract']],
+            'Windows': [['cargo', 'install', 'cargo-contract']],
+        },
+        'tezos': {
+            'Darwin': [['ligo', 'compile-contract']],
+            'Linux': [['ligo', 'compile-contract']],
+            'Windows': [['ligo', 'compile-contract']],
+        },
+        'near': {
+            'Darwin': [['npm', 'install', '-g', 'near-cli']],
+            'Linux': [['npm', 'install', '-g', 'near-cli']],
+            'Windows': [['npm', 'install', '-g', 'near-cli']],
+        },
         # Add other package managers and their install commands as needed
     }
 
@@ -423,6 +474,15 @@ def download_and_install(repo_url: str) -> None:
         'Cargo.toml': 'cargo',
         'rust-toolchain.toml': 'cargo',
         'rust-toolchain': 'cargo',
+        'foundry.toml': 'foundryup',
+        'remappings.txt': 'foundryup',
+        'anchor.toml': 'anchor',
+        'move.toml': 'move',
+        'brownie-config.yaml': 'brownie',
+        'substrate.toml': 'substrate',
+        'ink.toml': 'ink',
+        'tezos.toml': 'tezos',
+        'near.toml': 'near',
     }
 
     # Define commands to install dependencies based on dependency files
@@ -446,6 +506,15 @@ def download_and_install(repo_url: str) -> None:
         'Cargo.toml': ['cargo', 'build', '--no-default-features'],
         'rust-toolchain.toml': ['rustup', 'show'],
         'rust-toolchain': ['rustup', 'show'],
+        'foundry.toml': ['forge', 'build'],
+        'remappings.txt': ['forge', 'remappings'],
+        'anchor.toml': ['anchor', 'build'],
+        'move.toml': ['move', 'build'],
+        'brownie-config.yaml': ['brownie', 'compile'],
+        'substrate.toml': ['cargo', 'build'],
+        'ink.toml': ['cargo', 'contract', 'build'],
+        'tezos.toml': ['ligo', 'compile-contract'],
+        'near.toml': ['near', 'build'],
     }
 
     # Detect the current operating system
