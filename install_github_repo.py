@@ -282,6 +282,13 @@ def download_and_install(repo_url: str) -> None:
     Args:
         repo_url (str): The URL of the GitHub repository.
     """
+    # Check if we're restarting after a node version change
+    if os.path.exists('.node_version_change'):
+        with open('.node_version_change', 'r') as f:
+            version = f.read().strip()
+        os.remove('.node_version_change')
+        logging.info(f"Restarted with node version requirement: {version}")
+    
     # Parse repository name from URL
     parsed_url = urlparse(repo_url)
     repo_name = os.path.splitext(os.path.basename(parsed_url.path))[0]
@@ -490,7 +497,7 @@ def download_and_install(repo_url: str) -> None:
 
 def run_git_clone(repo_url: str, retries: int = 3, delay: int = 5) -> None:
     """
-    Clone a Git repository with retry logic.
+    Clone a Git repository with retry logic and improved HTTP handling.
 
     Args:
         repo_url (str): The URL of the Git repository to clone.
@@ -501,27 +508,69 @@ def run_git_clone(repo_url: str, retries: int = 3, delay: int = 5) -> None:
         subprocess.CalledProcessError: If all retry attempts fail.
     """
     logging.info(f"Starting to clone repository: {repo_url}")
+    
+    # Configure git for better HTTP handling
+    git_configs = [
+        ['git', 'config', '--global', 'http.postBuffer', '1048576000'],
+        ['git', 'config', '--global', 'http.maxRequestBuffer', '100M'],
+        ['git', 'config', '--global', 'core.compression', '0'],
+        ['git', 'config', '--global', 'http.lowSpeedLimit', '1000'],
+        ['git', 'config', '--global', 'http.lowSpeedTime', '60']
+    ]
+    
+    # Apply git configurations
+    for config_cmd in git_configs:
+        try:
+            subprocess.run(config_cmd, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            logging.warning(f"Failed to set git config {config_cmd}: {e}")
+
     for attempt in range(1, retries + 1):
         try:
             logging.info(f"Attempt {attempt} to clone the repository...")
-            subprocess.run(
-                ['git', 'config', '--global', 'http.postBuffer', '1048576000'],
-                check=True
+            
+            # Use git clone with improved options for better HTTP handling
+            clone_cmd = [
+                'git', 'clone',
+                '--depth', '1',
+                '--single-branch',
+                '--no-tags',
+                '--verbose',
+                '--progress',
+                repo_url
+            ]
+            
+            # Run the clone command with a timeout
+            process = subprocess.run(
+                clone_cmd,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minute timeout
             )
-            subprocess.run(
-                ['git', 'clone', '--depth', '1', '--config', 'core.compression=0', '--verbose', repo_url],
-                check=True
-            )
+            
+            # Log the output for debugging
+            if process.stdout:
+                logging.debug(f"Clone output: {process.stdout}")
+            
             logging.info("Repository cloned successfully.")
             return
+
+        except subprocess.TimeoutExpired:
+            logging.warning(f"Attempt {attempt} timed out after 5 minutes")
         except subprocess.CalledProcessError as e:
             logging.warning(f"Attempt {attempt} failed: {e}")
-            if attempt < retries:
-                logging.info(f"Retrying in {delay} seconds...")
-                time.sleep(delay)
-            else:
-                logging.error("All retry attempts to clone the repository have failed.")
-                raise
+            if e.stderr:
+                logging.debug(f"Error output: {e.stderr}")
+        
+        if attempt < retries:
+            # Exponential backoff
+            wait_time = delay * (2 ** (attempt - 1))
+            logging.info(f"Retrying in {wait_time} seconds...")
+            time.sleep(wait_time)
+        else:
+            logging.error("All retry attempts to clone the repository have failed.")
+            raise
 
 
 def get_required_package_manager_version(base_path: str) -> Dict[str, str]:
@@ -539,8 +588,9 @@ def get_required_package_manager_version(base_path: str) -> Dict[str, str]:
                 data = json.load(f)
                 engines = data.get('engines', {})
                 
-                # Get Node.js version requirement
+                # Get Node.js version requirement directly from engines
                 if 'node' in engines:
+                    # Store the exact version requirement string instead of simplifying it
                     versions['node'] = engines['node']
                 else:
                     # If no Node version specified, analyze dependencies for version hints
@@ -612,11 +662,15 @@ def get_required_package_manager_version(base_path: str) -> Dict[str, str]:
                 if 'yarn' in engines:
                     versions['yarn'] = engines['yarn']
                 if 'npm' in engines:
+                    # Store the exact version requirement string
                     versions['npm'] = engines['npm']
                 elif not versions.get('npm'):
                     # If no npm version specified but using older packages, set compatible version
                     if versions.get('node', '').startswith('<=16'):
                         versions['npm'] = '<=6.14.0'
+                    else:
+                        # Default to a compatible npm version for modern Node
+                        versions['npm'] = '>=7.0.0'
 
         except (json.JSONDecodeError, IOError):
             logging.warning("Could not parse package.json, using fallback versions")
@@ -662,84 +716,73 @@ def install_required_package_manager_version(manager: str, version: str) -> None
     Install the required version of a package manager.
     """
     try:
-        if manager == 'node':
-            # Check if nvm is installed
-            if not shutil.which('nvm'):
-                logging.info("nvm not found. Installing...")
-                current_os = platform.system()
-                
-                if current_os == 'Linux' or current_os == 'Darwin':
-                    # Install nvm on Linux/macOS
-                    try:
-                        # Download and run the nvm installation script
-                        subprocess.run(
-                            'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash',
-                            shell=True,
-                            check=True
-                        )
-                        
-                        # Source nvm in the current session
-                        nvm_dir = os.path.expanduser('~/.nvm')
-                        os.environ['NVM_DIR'] = nvm_dir
-                        
-                        # Create and execute a shell script that sources nvm and installs Node
-                        with open('temp_nvm.sh', 'w') as f:
-                            f.write(f'''#!/bin/bash
-                            export NVM_DIR="{nvm_dir}"
-                            [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"  # This loads nvm
-                            [ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
-                            nvm install {version.replace('>=', '')}
-                            nvm use {version.replace('>=', '')}
-                            ''')
-                        
-                        # Make the script executable and run it
-                        os.chmod('temp_nvm.sh', 0o755)
-                        subprocess.run(['/bin/bash', './temp_nvm.sh'], check=True)
-                        
-                        # Clean up
-                        os.remove('temp_nvm.sh')
-                        
-                        logging.info("nvm and Node.js installed successfully")
-                        return  # Exit the function here since Node is already installed
-                    except subprocess.CalledProcessError as e:
-                        logging.error(f"Failed to install nvm: {e}")
-                        raise
-                
-                elif current_os == 'Windows':
-                    # Install nvm-windows
-                    try:
-                        # Download nvm-windows installer
-                        subprocess.run(
-                            'curl -o nvm-setup.exe https://github.com/coreybutler/nvm-windows/releases/latest/download/nvm-setup.exe',
-                            shell=True,
-                            check=True
-                        )
-                        
-                        # Run the installer silently
-                        subprocess.run('nvm-setup.exe /SILENT /NORESTART', shell=True, check=True)
-                        
-                        # Clean up the installer
-                        os.remove('nvm-setup.exe')
-                        
-                        # Refresh environment variables
-                        os.environ['NVM_HOME'] = os.path.expandvars('%PROGRAMFILES%\\nvm')
-                        os.environ['NVM_SYMLINK'] = os.path.expandvars('%PROGRAMFILES%\\nodejs')
-                        
-                        logging.info("nvm-windows installed successfully")
-                    except subprocess.CalledProcessError as e:
-                        logging.error(f"Failed to install nvm-windows: {e}")
-                        raise
-                
-                else:
-                    logging.error(f"Unsupported operating system: {current_os}")
-                    raise Exception(f"Unsupported operating system: {current_os}")
+        if manager == 'npm':
+            # Get current node version
+            node_version = subprocess.run(['node', '-v'], 
+                                       capture_output=True, 
+                                       text=True).stdout.strip().lstrip('v')
+            
+            # Define npm version compatibility ranges
+            npm_compatibility = {
+                # node version : compatible npm version
+                '20.0': '9.6.4',  # Node 20.0-20.4
+                '20.5': '10.9.2', # Node 20.5+
+                '18.17': '10.9.2',# Node 18.17+
+                '18': '9.6.4',    # Node 18.0-18.16
+                '16': '8.19.4',   # Node 16.x
+                '14': '6.14.18'   # Node 14.x
+            }
+            
+            # Find the appropriate npm version based on node version
+            target_version = None
+            for node_req, npm_ver in npm_compatibility.items():
+                if node_version.startswith(node_req):
+                    target_version = npm_ver
+                    break
+            
+            if not target_version:
+                # Default to a safe version if no match found
+                target_version = '9.6.4'
+            
+            logging.info(f"Installing npm version {target_version} compatible with Node.js {node_version}")
+            subprocess.run(['npm', 'install', '-g', f'npm@{target_version}'], check=True)
+            logging.info(f"Installed npm version {target_version}")
+            
+        elif manager == 'node':
+            # Check if current node version matches required version
+            try:
+                current_version = subprocess.run(['node', '-v'], 
+                                              capture_output=True, 
+                                              text=True).stdout.strip()
+                if version.startswith('>='):
+                    required_version = version.replace('>=', '')
+                    if current_version.replace('v', '') >= required_version:
+                        logging.info(f"Current node version {current_version} satisfies requirement {version}")
+                        return
+                # Add other version comparison cases if needed
+            except subprocess.CalledProcessError:
+                pass
 
-            # Extract major version if using >=X.X.X format
-            version_num = version.replace('>=', '').split('.')[0]
-            logging.info(f"Installing node version {version_num}")
-            subprocess.run(f'nvm install {version_num} && nvm use {version_num}', 
-                         shell=True, check=True)
-            logging.info(f"Switched to node version {version_num}")
+            # If we need to change node version, write a restart marker and exit
+            with open('.node_version_change', 'w') as f:
+                f.write(version)
+            
+            # Execute nvm commands
+            nvm_dir = os.path.expanduser('~/.nvm')
+            with open('temp_nvm.sh', 'w') as f:
+                f.write(f'''#!/bin/bash
+                export NVM_DIR="{nvm_dir}"
+                [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+                nvm install {version}
+                nvm use {version}
+                ''')
+            
+            os.chmod('temp_nvm.sh', 0o755)
+            subprocess.run(['/bin/bash', './temp_nvm.sh'], check=True)
+            os.remove('temp_nvm.sh')
+            
+            logging.info(f"Node version changed. Restarting script...")
+            os.execv(sys.executable, ['python'] + sys.argv)
             
         elif manager == 'yarn':
             if version.startswith('^') or version.startswith('~'):
@@ -753,6 +796,7 @@ def install_required_package_manager_version(manager: str, version: str) -> None
             logging.info(f"Installing npm version {version}")
             subprocess.run(['npm', 'install', '-g', f'npm@{version}'], check=True)
             logging.info(f"Installed npm version {version}")
+            
     except subprocess.CalledProcessError as e:
         logging.error(f"Failed to install {manager} version {version}: {e}")
         raise

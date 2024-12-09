@@ -1,0 +1,21 @@
+# Core dependencies
+urllib3>=2.0.0
+typing-extensions>=4.7.1
+python-dotenv>=1.0.0
+argparse>=1.4.0
+
+# Development & Testing
+pytest>=7.4.0
+black>=23.7.0
+flake8>=6.1.0
+mypy>=1.4.1
+pytest-cov>=4.1.0
+pytest-mock>=3.11.1
+
+# Type checking
+types-urllib3>=1.26.25
+types-setuptools>=68.0.0
+types-requests>=2.31.0
+
+# Optional dependencies
+concurrent-futures>=3.0.5  # If using Python < 3.2
