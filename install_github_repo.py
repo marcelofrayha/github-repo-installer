@@ -25,19 +25,39 @@ def check_and_install_package_manager(manager: str, install_commands: List[List[
         install_commands (List[List[str]]): A list of commands to install the package manager.
     """
     logging.info(f"Checking if '{manager}' is installed...")
-    if shutil.which(manager) is None:
-        logging.info(f"'{manager}' not found. Initiating installation...")
-        for cmd in install_commands:
-            try:
-                logging.info(f"Running command: {' '.join(cmd)}")
-                subprocess.run(cmd, check=True)
-                logging.info(f"'{manager}' installed successfully using: {' '.join(cmd)}")
-            except subprocess.CalledProcessError:
-                logging.error(f"Failed to install '{manager}' using: {' '.join(cmd)}")
-                sys.exit(1)
-        logging.info(f"'{manager}' is now installed.")
-    else:
-        logging.info(f"'{manager}' is already installed.")
+    
+    # First check if the command exists in PATH
+    if shutil.which(manager) is not None:
+        try:
+            # Verify the command actually works by checking its version
+            subprocess.run([manager, '--version'], check=True, capture_output=True)
+            logging.info(f"'{manager}' is already installed and working.")
+            return
+        except subprocess.CalledProcessError:
+            logging.warning(f"'{manager}' found in PATH but not working properly.")
+    
+    # If we get here, we need to install or reinstall the package manager
+    logging.info(f"'{manager}' not found or not working. Initiating installation...")
+    for cmd in install_commands:
+        try:
+            logging.info(f"Running command: {' '.join(cmd)}")
+            subprocess.run(cmd, check=True)
+            
+            # Verify installation was successful
+            if shutil.which(manager) is not None:
+                try:
+                    subprocess.run([manager, '--version'], check=True, capture_output=True)
+                    logging.info(f"'{manager}' installed successfully using: {' '.join(cmd)}")
+                    return
+                except subprocess.CalledProcessError:
+                    continue
+        except subprocess.CalledProcessError:
+            logging.warning(f"Failed to install '{manager}' using: {' '.join(cmd)}")
+            continue
+    
+    # If we get here, all installation attempts failed
+    logging.error(f"Failed to install '{manager}' after trying all commands")
+    sys.exit(1)
 
 
 def detect_environment_variables(base_path: str) -> Set[str]:
@@ -523,12 +543,72 @@ def get_required_package_manager_version(base_path: str) -> Dict[str, str]:
                 if 'node' in engines:
                     versions['node'] = engines['node']
                 else:
-                    # If no Node version specified, check dependencies for hints
+                    # If no Node version specified, analyze dependencies for version hints
                     deps = {**data.get('dependencies', {}), **data.get('devDependencies', {})}
-                    if 'ganache-core' in deps or 'truffle' in deps:
-                        versions['node'] = '<=16.0.0'  # These packages typically need Node 16 or lower
-                
-                # Get package manager versions if specified
+                    
+                    # Define known package version constraints
+                    package_constraints = {
+                        # Web3 and blockchain tools
+                        'ganache-core': '<=16.0.0',
+                        'truffle': '<=16.0.0',
+                        'hardhat': '>=14.0.0',
+                        'web3': '>=12.0.0',
+                        'ethers': '>=12.0.0',
+                        
+                        # Common frameworks
+                        'react': '>=12.0.0',
+                        'next': '>=14.0.0',
+                        'vue': '>=12.0.0',
+                        'angular': '>=14.0.0',
+                        'svelte': '>=14.0.0',
+                        
+                        # Build tools
+                        'webpack': '>=12.0.0',
+                        'vite': '>=14.0.0',
+                        'esbuild': '>=14.0.0',
+                        'rollup': '>=12.0.0',
+                        
+                        # Testing frameworks
+                        'jest': '>=12.0.0',
+                        'mocha': '>=12.0.0',
+                        'cypress': '>=14.0.0',
+                        
+                        # Legacy packages
+                        'gulp': '<=16.0.0',
+                        'grunt': '<=14.0.0',
+                        'bower': '<=14.0.0'
+                    }
+                    
+                    # Collect all version constraints from dependencies
+                    version_constraints = []
+                    for pkg, constraint in package_constraints.items():
+                        if pkg in deps:
+                            version_constraints.append(constraint)
+                    
+                    if version_constraints:
+                        # If we have conflicting version requirements, prefer newer versions
+                        # as they're generally more compatible with modern tooling
+                        has_legacy = any(v.startswith('<=') for v in version_constraints)
+                        has_modern = any(v.startswith('>=') for v in version_constraints)
+                        
+                        if has_legacy and has_modern:
+                            versions['node'] = '>=14.0.0 <=16.0.0'  # Compatible middle ground
+                        elif has_legacy:
+                            versions['node'] = '<=16.0.0'  # Legacy compatibility
+                        else:
+                            versions['node'] = '>=14.0.0'  # Modern versions
+                    else:
+                        # Default to a reasonable modern version if no specific requirements found
+                        versions['node'] = '>=14.0.0'
+                    
+                    # Check for TypeScript as it might need more recent Node versions
+                    if 'typescript' in deps:
+                        typescript_version = deps['typescript']
+                        if typescript_version.startswith('^4') or typescript_version.startswith('~4'):
+                            versions['node'] = '>=14.0.0'
+                        elif typescript_version.startswith('^5') or typescript_version.startswith('~5'):
+                            versions['node'] = '>=16.0.0'
+
                 if 'yarn' in engines:
                     versions['yarn'] = engines['yarn']
                 if 'npm' in engines:
@@ -656,6 +736,7 @@ def install_required_package_manager_version(manager: str, version: str) -> None
 
             # Extract major version if using >=X.X.X format
             version_num = version.replace('>=', '').split('.')[0]
+            logging.info(f"Installing node version {version_num}")
             subprocess.run(f'nvm install {version_num} && nvm use {version_num}', 
                          shell=True, check=True)
             logging.info(f"Switched to node version {version_num}")
@@ -663,11 +744,13 @@ def install_required_package_manager_version(manager: str, version: str) -> None
         elif manager == 'yarn':
             if version.startswith('^') or version.startswith('~'):
                 version = version[1:]
+            logging.info(f"Installing yarn version {version}")
             subprocess.run(['npm', 'install', '-g', f'yarn@{version}'], check=True)
             logging.info(f"Installed yarn version {version}")
         elif manager == 'npm':
             if version.startswith('^') or version.startswith('~'):
                 version = version[1:]
+            logging.info(f"Installing npm version {version}")
             subprocess.run(['npm', 'install', '-g', f'npm@{version}'], check=True)
             logging.info(f"Installed npm version {version}")
     except subprocess.CalledProcessError as e:
@@ -714,6 +797,7 @@ def find_and_install_dependencies(
         # Handle Node.js dependencies
         if any(f in files for f in ['package.json', 'yarn.lock', 'package-lock.json']):
             try:
+                logging.info(f"Node.js dependencies installing in '{root}'")
                 subprocess.run(['npm', 'install', '--legacy-peer-deps'], check=True, cwd=root)
                 logging.info(f"Node.js dependencies installed successfully in '{root}'")
             except subprocess.CalledProcessError as e:
