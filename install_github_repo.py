@@ -117,7 +117,7 @@ def detect_environment_variables(base_path: str) -> Set[str]:
                         # Skip files that can't be decoded or found
                         continue
 
-        # Optionally, handle environment variables for subrepositories if needed
+        # Handle environment variables for subrepositories if needed
         for subrepo in subrepositories:
             logging.info("Detecting environment variables for subrepository: %s", subrepo)
             sub_env_vars = detect_environment_variables(subrepo)
@@ -184,7 +184,7 @@ def prompt_for_env_vars(env_vars: Set[str]) -> None:
         os.environ[var] = value
         logging.info("Environment variable '%s' set.", var)
 
-    # Update the .env* file instead of appending to .env to prevent duplicates
+    # Update the .env* file
     update_env_files(missing_vars)
 
 
@@ -714,15 +714,6 @@ def find_and_install_dependencies(
         # Handle Node.js dependencies
         if any(f in files for f in ['package.json', 'yarn.lock', 'package-lock.json']):
             try:
-                if os.path.exists(os.path.join(root, 'node_modules')):
-                    shutil.rmtree(os.path.join(root, 'node_modules'))
-                if os.path.exists(os.path.join(root, 'package-lock.json')):
-                    os.remove(os.path.join(root, 'package-lock.json'))
-                if os.path.exists(os.path.join(root, 'yarn.lock')):
-                    os.remove(os.path.join(root, 'yarn.lock'))
-                
-                # Modified npm install command to properly disable cache
-                subprocess.run(['npm', 'cache', 'clean', '--force'], check=True, cwd=root)
                 subprocess.run(['npm', 'install', '--legacy-peer-deps'], check=True, cwd=root)
                 logging.info(f"Node.js dependencies installed successfully in '{root}'")
             except subprocess.CalledProcessError as e:
@@ -783,24 +774,7 @@ def find_and_install_dependencies(
 
                         for attempt in range(max_retries):
                             try:
-                                # Modified to skip cache for all package managers
                                 cmd = dependency_install_commands[dep_file_pattern]
-                                if isinstance(cmd, list):
-                                    if 'pip' in cmd[0]:
-                                        cmd.insert(1, '--no-cache-dir')
-                                    elif 'npm' in cmd[0]:
-                                        # First clean npm cache, then run the install command
-                                        subprocess.run(['npm', 'cache', 'clean', '--force'], check=True, cwd=root)
-                                    elif 'yarn' in cmd[0]:
-                                        cmd.append('--no-cache')
-                                    elif 'composer' in cmd[0]:
-                                        cmd.append('--no-cache')
-                                    elif 'cargo' in cmd[0]:
-                                        # Remove --no-registry-index and use only valid flags
-                                        cmd.extend(['--offline', '--ignore-rust-version'])
-                                        # Clean cargo cache before building
-                                        subprocess.run(['cargo', 'clean'], check=True, cwd=root)
-                                
                                 subprocess.run(cmd, check=True, cwd=root, timeout=300)
                                 logging.info(f"Dependencies from {file} installed successfully in '{root}'")
                                 break
