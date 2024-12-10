@@ -298,6 +298,14 @@ def download_and_install(repo_url: str) -> None:
     Args:
         repo_url (str): The URL of the GitHub repository.
     """
+    # Create repositories directory if it doesn't exist
+    repositories_dir = 'repositories'
+    if not os.path.exists(repositories_dir):
+        os.makedirs(repositories_dir)
+    
+    # Change to repositories directory
+    os.chdir(repositories_dir)
+    
     # Check if we're restarting after a node version change
     if os.path.exists('.node_version_change'):
         with open('.node_version_change', 'r') as f:
@@ -915,6 +923,72 @@ def find_and_install_dependencies(
                 logging.info(f"Node.js dependencies installed successfully in '{root}'")
             except subprocess.CalledProcessError as e:
                 logging.error(f"Failed to install Node.js dependencies in '{root}': {e}")
+
+        # Special handling for npm workspaces
+        if os.path.exists(os.path.join(base_path, 'indexer/package.json')):
+            try:
+                logging.info("Detected npm workspace in indexer directory. Installing workspace dependencies...")
+                indexer_path = os.path.join(base_path, 'indexer')
+                
+                # First, replace workspace: protocol with latest version
+                for root, _, files in os.walk(indexer_path):
+                    for file in files:
+                        if file == 'package.json':
+                            pkg_path = os.path.join(root, file)
+                            try:
+                                with open(pkg_path, 'r') as f:
+                                    package_data = json.load(f)
+                                
+                                # Replace workspace: dependencies with *
+                                if 'dependencies' in package_data:
+                                    for dep, version in package_data['dependencies'].items():
+                                        if isinstance(version, str) and version.startswith('workspace:'):
+                                            package_data['dependencies'][dep] = '*'
+                                
+                                if 'devDependencies' in package_data:
+                                    for dep, version in package_data['devDependencies'].items():
+                                        if isinstance(version, str) and version.startswith('workspace:'):
+                                            package_data['devDependencies'][dep] = '*'
+                                
+                                # Write back modified package.json
+                                with open(pkg_path, 'w') as f:
+                                    json.dump(package_data, f, indent=2)
+                            
+                            except (json.JSONDecodeError, IOError) as e:
+                                logging.warning(f"Failed to process {pkg_path}: {e}")
+                
+                # Now install dependencies
+                try:
+                    # First install in root directory
+                    subprocess.run(['npm', 'install', '--legacy-peer-deps'], 
+                                check=True, 
+                                cwd=indexer_path)
+                    
+                    # Then install in each package directory
+                    if os.path.exists(os.path.join(indexer_path, 'packages')):
+                        for pkg in os.listdir(os.path.join(indexer_path, 'packages')):
+                            pkg_path = os.path.join(indexer_path, 'packages', pkg)
+                            if os.path.isdir(pkg_path):
+                                subprocess.run(['npm', 'install', '--legacy-peer-deps'],
+                                            check=True,
+                                            cwd=pkg_path)
+                    
+                    if os.path.exists(os.path.join(indexer_path, 'services')):
+                        for svc in os.listdir(os.path.join(indexer_path, 'services')):
+                            svc_path = os.path.join(indexer_path, 'services', svc)
+                            if os.path.isdir(svc_path):
+                                subprocess.run(['npm', 'install', '--legacy-peer-deps'],
+                                            check=True,
+                                            cwd=svc_path)
+                    
+                    logging.info("Successfully installed workspace dependencies")
+                    return
+                    
+                except subprocess.CalledProcessError as e:
+                    logging.error(f"Failed to install dependencies: {e}")
+                    
+            except Exception as e:
+                logging.error(f"Failed to install workspace dependencies: {e}")
 
         for file in files:
             if file in ['package.json', 'yarn.lock', 'package-lock.json', 'pnpm-lock.yaml']:
